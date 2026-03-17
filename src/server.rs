@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::process::Stdio;
 
 use tokio::process::{Child, Command};
 use tracing::{debug, info, warn};
@@ -15,11 +16,15 @@ const SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 impl Server {
     /// Spawn the server binary with the given arguments.
-    pub fn spawn(binary: &Path, args: &[String]) -> Result<Self> {
+    pub fn spawn(binary: &Path, args: &[String], show_logs: bool) -> Result<Self> {
         info!(binary = %binary.display(), "Starting server");
 
         let mut cmd = Command::new(binary);
         cmd.args(args);
+
+        if !show_logs {
+            cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        }
 
         // Spawn in its own process group so we can signal the whole tree
         #[cfg(unix)]

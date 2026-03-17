@@ -26,7 +26,7 @@ async fn spawn_and_stop_server() {
     let binary = create_fake_server(tmp.path());
 
     let server =
-        cargo_serve::server::Server::spawn(&binary, &[]).expect("should spawn fake server");
+        cargo_serve::server::Server::spawn(&binary, &[], true).expect("should spawn fake server");
 
     // Give it a moment to start
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -54,7 +54,7 @@ async fn spawn_with_args() {
     }
 
     let args = vec!["--port".to_string(), "8080".to_string()];
-    let server = cargo_serve::server::Server::spawn(&script, &args).expect("should spawn");
+    let server = cargo_serve::server::Server::spawn(&script, &args, true).expect("should spawn");
 
     tokio::time::sleep(Duration::from_millis(300)).await;
     server.stop().await.expect("should stop cleanly");
@@ -76,7 +76,7 @@ async fn stop_already_exited_server() {
         }
     }
 
-    let server = cargo_serve::server::Server::spawn(&script, &[]).expect("should spawn");
+    let server = cargo_serve::server::Server::spawn(&script, &[], true).expect("should spawn");
 
     // Wait for process to exit on its own
     tokio::time::sleep(Duration::from_millis(200)).await;

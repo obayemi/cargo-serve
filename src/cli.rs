@@ -39,6 +39,14 @@ pub struct ServeArgs {
     #[arg(long)]
     pub no_check: bool,
 
+    /// Hide server stdout/stderr output
+    #[arg(long)]
+    pub no_server_logs: bool,
+
+    /// Hide build/check output
+    #[arg(long)]
+    pub no_build_logs: bool,
+
     /// Arguments to pass to the server binary
     #[arg(last = true)]
     pub server_args: Vec<String>,
@@ -55,6 +63,8 @@ mod tests {
         assert!(!args.release);
         assert_eq!(args.debounce_ms, 500);
         assert!(!args.no_check);
+        assert!(!args.no_server_logs);
+        assert!(!args.no_build_logs);
     }
 
     #[test]
@@ -74,6 +84,8 @@ mod tests {
             "--ignore",
             "docs",
             "--no-check",
+            "--no-server-logs",
+            "--no-build-logs",
             "--",
             "--port",
             "8080",
@@ -85,6 +97,8 @@ mod tests {
         assert_eq!(args.extra_watch, vec!["templates"]);
         assert_eq!(args.extra_ignore, vec!["docs"]);
         assert!(args.no_check);
+        assert!(args.no_server_logs);
+        assert!(args.no_build_logs);
         assert_eq!(args.server_args, vec!["--port", "8080"]);
     }
 }

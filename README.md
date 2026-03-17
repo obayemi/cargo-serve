@@ -34,6 +34,8 @@ cargo serve [OPTIONS] [-- <server args>...]
 | `--watch <PATH>` | Additional paths to watch | |
 | `--ignore <PATH>` | Additional paths to ignore | |
 | `--no-check` | Skip `cargo check`, go straight to build | |
+| `--no-server-logs` | Hide server stdout/stderr output | |
+| `--no-build-logs` | Hide build/check output | |
 
 ### Examples
 

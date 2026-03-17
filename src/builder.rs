@@ -11,16 +11,18 @@ use crate::project::ProjectInfo;
 
 /// Run the check → build pipeline and return the path to the staged binary.
 pub async fn build(project: &ProjectInfo, args: &ServeArgs) -> Result<PathBuf> {
+    let show_logs = !args.no_build_logs;
+
     if !args.no_check {
         info!("Running cargo check...");
-        if !run_cargo_check(project, args).await? {
+        if !run_cargo_check(project, args, show_logs).await? {
             return Err(Error::CheckFailed);
         }
         info!("Check passed");
     }
 
     info!("Running cargo build...");
-    let binary_path = run_cargo_build(project, args).await?;
+    let binary_path = run_cargo_build(project, args, show_logs).await?;
     info!("Build succeeded");
 
     let staged = stage_binary(&binary_path, project)?;
@@ -29,7 +31,7 @@ pub async fn build(project: &ProjectInfo, args: &ServeArgs) -> Result<PathBuf> {
     Ok(staged)
 }
 
-async fn run_cargo_check(project: &ProjectInfo, args: &ServeArgs) -> Result<bool> {
+async fn run_cargo_check(project: &ProjectInfo, args: &ServeArgs, show_logs: bool) -> Result<bool> {
     let mut cmd = Command::new("cargo");
     cmd.arg("check")
         .arg("--bin")
@@ -39,7 +41,11 @@ async fn run_cargo_check(project: &ProjectInfo, args: &ServeArgs) -> Result<bool
     apply_common_args(&mut cmd, args);
 
     cmd.stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(if show_logs {
+            Stdio::inherit()
+        } else {
+            Stdio::null()
+        })
         .kill_on_drop(true);
 
     let mut child = cmd.spawn()?;
@@ -49,7 +55,8 @@ async fn run_cargo_check(project: &ProjectInfo, args: &ServeArgs) -> Result<bool
         let reader = BufReader::new(stdout);
         let mut lines = reader.lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&line)
+            if show_logs
+                && let Ok(msg) = serde_json::from_str::<serde_json::Value>(&line)
                 && msg.get("level").and_then(|l| l.as_str()) == Some("error")
                 && let Some(rendered) = msg
                     .get("message")
@@ -65,7 +72,11 @@ async fn run_cargo_check(project: &ProjectInfo, args: &ServeArgs) -> Result<bool
     Ok(status.success())
 }
 
-async fn run_cargo_build(project: &ProjectInfo, args: &ServeArgs) -> Result<PathBuf> {
+async fn run_cargo_build(
+    project: &ProjectInfo,
+    args: &ServeArgs,
+    show_logs: bool,
+) -> Result<PathBuf> {
     let mut cmd = Command::new("cargo");
     cmd.arg("build")
         .arg("--bin")
@@ -75,7 +86,11 @@ async fn run_cargo_build(project: &ProjectInfo, args: &ServeArgs) -> Result<Path
     apply_common_args(&mut cmd, args);
 
     cmd.stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(if show_logs {
+            Stdio::inherit()
+        } else {
+            Stdio::null()
+        })
         .kill_on_drop(true);
 
     let mut child = cmd.spawn()?;

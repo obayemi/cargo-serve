@@ -40,7 +40,7 @@ async fn run(args: ServeArgs) -> Result<()> {
     let binary = builder::build(&project, &args).await?;
 
     // Start the server
-    let mut current_server = Server::spawn(&binary, &args.server_args)?;
+    let mut current_server = Server::spawn(&binary, &args.server_args, !args.no_server_logs)?;
 
     // Start file watcher
     let debounce = Duration::from_millis(args.debounce_ms);
@@ -73,7 +73,7 @@ async fn run(args: ServeArgs) -> Result<()> {
                     Some(Ok(new_binary)) => {
                         // Build succeeded — restart server
                         current_server.stop().await?;
-                        current_server = Server::spawn(&new_binary, &args.server_args)?;
+                        current_server = Server::spawn(&new_binary, &args.server_args, !args.no_server_logs)?;
                         info!("Server restarted with new binary");
                     }
                     Some(Err(e)) => {
