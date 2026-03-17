@@ -6,7 +6,9 @@
       "WebFetch(domain:docs.rs)",
       "Bash(jj git:*)",
       "Bash(nix flake:*)",
-      "Bash(jj commit:*)"
+      "Bash(jj commit:*)",
+      "Bash(cargo init:*)",
+      "Bash(cargo test:*)"
     ]
   }
 }
