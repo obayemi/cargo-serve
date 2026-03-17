@@ -1,19 +1,14 @@
-mod builder;
-mod cli;
-mod error;
-mod project;
-mod server;
-mod watcher;
-
 use std::time::Duration;
 
 use clap::Parser;
 use tracing::{error, info};
 
-use cli::{CargoSubcommand, ServeArgs};
-use error::Result;
-use project::ProjectInfo;
-use server::Server;
+use cargo_serve::builder;
+use cargo_serve::cli::{CargoSubcommand, ServeArgs};
+use cargo_serve::error::Result;
+use cargo_serve::project::ProjectInfo;
+use cargo_serve::server::Server;
+use cargo_serve::watcher;
 
 #[tokio::main]
 async fn main() {

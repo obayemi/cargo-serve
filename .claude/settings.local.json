@@ -8,7 +8,9 @@
       "Bash(nix flake:*)",
       "Bash(jj commit:*)",
       "Bash(cargo init:*)",
-      "Bash(cargo test:*)"
+      "Bash(cargo test:*)",
+      "Bash(cargo add:*)",
+      "Bash(cargo:*)"
     ]
   }
 }
