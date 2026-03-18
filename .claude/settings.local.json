@@ -11,7 +11,8 @@
       "Bash(cargo test:*)",
       "Bash(cargo add:*)",
       "Bash(cargo:*)",
-      "Bash(jj log:*)"
+      "Bash(jj log:*)",
+      "Bash(cargo check:*)"
     ]
   }
 }

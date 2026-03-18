@@ -8,7 +8,7 @@ pub enum CargoSubcommand {
     Serve(ServeArgs),
 }
 
-#[derive(Debug, Parser)]
+#[derive(Debug, Default, Parser)]
 #[command(version, about)]
 pub struct ServeArgs {
     /// Binary target to run (defaults to the package's only binary)

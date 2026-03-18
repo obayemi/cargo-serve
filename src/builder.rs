@@ -3,7 +3,7 @@ use std::process::Stdio;
 
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::cli::ServeArgs;
 use crate::error::{Error, Result};
@@ -55,15 +55,8 @@ async fn run_cargo_check(project: &ProjectInfo, args: &ServeArgs, show_logs: boo
         let reader = BufReader::new(stdout);
         let mut lines = reader.lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            if show_logs
-                && let Ok(msg) = serde_json::from_str::<serde_json::Value>(&line)
-                && msg.get("level").and_then(|l| l.as_str()) == Some("error")
-                && let Some(rendered) = msg
-                    .get("message")
-                    .and_then(|m| m.get("rendered"))
-                    .and_then(|r| r.as_str())
-            {
-                eprint!("{rendered}");
+            if show_logs {
+                print_diagnostic(&line);
             }
         }
     }
@@ -103,6 +96,9 @@ async fn run_cargo_build(
             if let Some(path) = parse_compiler_artifact(&line, &project.bin_name) {
                 binary_path = Some(path);
             }
+            if show_logs {
+                print_diagnostic(&line);
+            }
         }
     }
 
@@ -111,7 +107,47 @@ async fn run_cargo_build(
         return Err(Error::BuildFailed);
     }
 
-    binary_path.ok_or(Error::BinaryNotFoundInOutput)
+    // Fall back to the expected binary path if JSON parsing didn't find it
+    let binary_path = match binary_path {
+        Some(p) => p,
+        None => {
+            let fallback = expected_binary_path(project, args);
+            warn!(
+                path = %fallback.display(),
+                "Binary not found in cargo JSON output, using expected path"
+            );
+            fallback
+        }
+    };
+
+    if !binary_path.exists() {
+        return Err(Error::BinaryNotFoundInOutput);
+    }
+
+    Ok(binary_path)
+}
+
+/// Print a cargo diagnostic message (compiler-message with rendered output).
+fn print_diagnostic(json_line: &str) {
+    let Ok(msg) = serde_json::from_str::<serde_json::Value>(json_line) else {
+        return;
+    };
+    if msg.get("reason").and_then(|r| r.as_str()) != Some("compiler-message") {
+        return;
+    }
+    if let Some(rendered) = msg
+        .get("message")
+        .and_then(|m| m.get("rendered"))
+        .and_then(|r| r.as_str())
+    {
+        eprint!("{rendered}");
+    }
+}
+
+/// Construct the expected binary path from project metadata.
+fn expected_binary_path(project: &ProjectInfo, args: &ServeArgs) -> PathBuf {
+    let profile = if args.release { "release" } else { "debug" };
+    project.target_dir.join(profile).join(&project.bin_name)
 }
 
 fn apply_common_args(cmd: &mut Command, args: &ServeArgs) {
@@ -200,5 +236,38 @@ mod tests {
     #[test]
     fn parse_invalid_json() {
         assert_eq!(parse_compiler_artifact("not json", "myapp"), None);
+    }
+
+    #[test]
+    fn expected_binary_path_debug() {
+        let project = ProjectInfo {
+            package_name: "myapp".into(),
+            bin_name: "myapp".into(),
+            target_dir: PathBuf::from("/tmp/myapp/target"),
+            workspace_root: PathBuf::from("/tmp/myapp"),
+        };
+        let args = ServeArgs::default();
+        assert_eq!(
+            expected_binary_path(&project, &args),
+            PathBuf::from("/tmp/myapp/target/debug/myapp")
+        );
+    }
+
+    #[test]
+    fn expected_binary_path_release() {
+        let project = ProjectInfo {
+            package_name: "myapp".into(),
+            bin_name: "myapp".into(),
+            target_dir: PathBuf::from("/tmp/myapp/target"),
+            workspace_root: PathBuf::from("/tmp/myapp"),
+        };
+        let args = ServeArgs {
+            release: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            expected_binary_path(&project, &args),
+            PathBuf::from("/tmp/myapp/target/release/myapp")
+        );
     }
 }
