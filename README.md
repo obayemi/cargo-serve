@@ -6,7 +6,9 @@ A Cargo plugin that watches for file changes, rebuilds your project, and **only 
 
 - **Smart restart**: failed builds never take down your running server
 - **Check before build**: runs `cargo check` first for fast error feedback, then builds only on success
-- **Binary staging**: copies the built binary to a staging area so `cargo build` never overwrites the running process
+- **Atomic binary staging**: stages each build to a separate file and swaps it in via an atomic rename, so a rebuild never tries to overwrite the binary the server is currently executing (which fails with `ETXTBSY` on Linux)
+- **Crash detection**: notices when the server exits on its own — a panic, a non-zero exit, or a failed startup such as a port already in use — and reports it instead of pretending the server is still up
+- **Resilient restarts**: a failed restart doesn't take down the watcher; the next successful build brings the server back
 - **Build cancellation**: new file changes during a build cancel the current build and start fresh
 - **Gitignore-aware**: respects `.gitignore` rules automatically
 - **Process group management**: cleanly shuts down server and all child processes via SIGTERM/SIGKILL
@@ -63,7 +65,8 @@ File change → debounce → cargo check → cargo build → stage binary → re
 
 1. Discovers the project via `cargo metadata`
 2. Runs an initial build (fails hard if it doesn't compile)
-3. Copies the binary to `target/.cargo-serve/` and starts the server from there
+3. Stages the binary into `target/.cargo-serve/` (copy to a temp file, then atomic rename) and starts the server from there
 4. Watches `src/`, `Cargo.toml`, `Cargo.lock` (and any `--watch` paths) for changes
 5. On change: check → build → stage → restart (keeping the old server on failure)
-6. On Ctrl+C: sends SIGTERM to the server process group, escalates to SIGKILL after 5s
+6. If the server exits on its own, logs the exit and waits for the next change to rebuild and restart it
+7. On Ctrl+C: sends SIGTERM to the server process group, escalates to SIGKILL after 5s

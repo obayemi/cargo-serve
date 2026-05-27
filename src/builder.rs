@@ -187,21 +187,45 @@ fn stage_binary(source: &PathBuf, project: &ProjectInfo) -> Result<PathBuf> {
     })?;
 
     let dest = project.staged_binary();
-    std::fs::copy(source, &dest).map_err(|e| Error::StagingFailed {
+
+    // Copy to a temp file in the same directory, then atomically rename it over
+    // the destination. A plain copy truncates `dest` in place, which fails with
+    // ETXTBSY (Linux) when the previous staged binary is still being executed by
+    // the running server. rename(2) swaps the directory entry to a fresh inode,
+    // leaving the running process's already-open inode untouched.
+    let tmp = staging_dir.join(format!(".{}.new", project.bin_name));
+
+    let staged = copy_and_swap(source, &tmp, &dest);
+    if staged.is_err() {
+        // Don't leave a half-staged temp file behind on failure.
+        let _ = std::fs::remove_file(&tmp);
+    }
+    staged
+}
+
+/// Copy `source` to `tmp`, make it executable, then atomically rename it onto `dest`.
+fn copy_and_swap(source: &PathBuf, tmp: &PathBuf, dest: &PathBuf) -> Result<PathBuf> {
+    let stage = |e| Error::StagingFailed {
+        path: tmp.clone(),
+        source: e,
+    };
+    std::fs::copy(source, tmp).map_err(stage)?;
+
+    // Ensure the staged binary is executable.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(tmp).map_err(stage)?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(tmp, perms).map_err(stage)?;
+    }
+
+    std::fs::rename(tmp, dest).map_err(|e| Error::StagingFailed {
         path: dest.clone(),
         source: e,
     })?;
 
-    // Ensure the staged binary is executable
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&dest)?.permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&dest, perms)?;
-    }
-
-    Ok(dest)
+    Ok(dest.clone())
 }
 
 #[cfg(test)]
@@ -251,6 +275,54 @@ mod tests {
             expected_binary_path(&project, &args),
             PathBuf::from("/tmp/myapp/target/debug/myapp")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage_binary_atomically_replaces_in_use_destination() {
+        use std::io::Read;
+        use std::os::unix::fs::MetadataExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let project = ProjectInfo {
+            package_name: "myapp".into(),
+            bin_name: "myapp".into(),
+            target_dir: tmp.path().join("target"),
+            workspace_root: tmp.path().to_path_buf(),
+        };
+
+        // First build → first staged binary.
+        let src1 = tmp.path().join("src1");
+        std::fs::write(&src1, b"VERSION-1").unwrap();
+        let dest = stage_binary(&src1, &project).unwrap();
+        let inode_1 = std::fs::metadata(&dest).unwrap().ino();
+
+        // Emulate the running server holding the staged binary's inode open.
+        // (A running executable keeps its file's inode mapped exactly like this.)
+        let mut held = std::fs::File::open(&dest).unwrap();
+
+        // Second build → re-stage over the same path while the first is still in use.
+        let src2 = tmp.path().join("src2");
+        std::fs::write(&src2, b"VERSION-2-LONGER").unwrap();
+        let dest2 = stage_binary(&src2, &project).unwrap();
+        assert_eq!(dest, dest2, "staging path must be stable");
+        let inode_2 = std::fs::metadata(&dest).unwrap().ino();
+
+        // Atomic replacement must give the destination a FRESH inode rather than
+        // truncating the in-use one in place (an in-place overwrite fails with
+        // ETXTBSY when the server is executing it).
+        assert_ne!(
+            inode_1, inode_2,
+            "re-staging must not overwrite the in-use inode in place"
+        );
+
+        // The still-open handle keeps seeing the original content (old inode intact).
+        let mut old = String::new();
+        held.read_to_string(&mut old).unwrap();
+        assert_eq!(old, "VERSION-1");
+
+        // The destination now holds the new content.
+        assert_eq!(std::fs::read(&dest).unwrap(), b"VERSION-2-LONGER");
     }
 
     #[test]
