@@ -25,6 +25,8 @@ cargo install --path .
 cargo serve [OPTIONS] [-- <server args>...]
 ```
 
+Run it either as a Cargo subcommand (`cargo serve`) or directly (`cargo-serve`) — `serve` is the default command, so the explicit subcommand is optional when invoking the binary by name.
+
 ### Options
 
 | Option | Description | Default |

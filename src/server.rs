@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, chain};
 
 /// Monotonic id assigned to each spawned server, used to match an exit
 /// notification to the server that produced it (immune to PID reuse).
@@ -79,7 +79,7 @@ impl Server {
             let status = child.wait().await;
             match &status {
                 Ok(s) => debug!(pid, status = %s, "Server exited"),
-                Err(e) => warn!(pid, "Error waiting for server: {e}"),
+                Err(e) => warn!(pid, "Error waiting for server: {}", chain(&e)),
             }
             let _ = exit_tx.send(ServerExit { id, pid, status });
         });

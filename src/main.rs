@@ -1,12 +1,11 @@
 use std::time::Duration;
 
-use clap::Parser;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 use cargo_serve::builder;
-use cargo_serve::cli::{CargoSubcommand, ServeArgs};
-use cargo_serve::error::Result;
+use cargo_serve::cli::ServeArgs;
+use cargo_serve::error::{Result, chain};
 use cargo_serve::project::ProjectInfo;
 use cargo_serve::server::{Server, ServerExit};
 use cargo_serve::watcher;
@@ -21,10 +20,10 @@ async fn main() {
         .with_target(false)
         .init();
 
-    let CargoSubcommand::Serve(args) = CargoSubcommand::parse();
+    let args = ServeArgs::parse_env();
 
     if let Err(e) = run(args).await {
-        error!("{e}");
+        error!("{}", chain(&e));
         std::process::exit(1);
     }
 }
@@ -75,7 +74,7 @@ async fn run(args: ServeArgs) -> Result<()> {
                             "Server (pid {}) exited unexpectedly ({status}). Save a change to rebuild and restart.",
                             exit.pid
                         ),
-                        Err(e) => error!("Server (pid {}) could not be waited on: {e}", exit.pid),
+                        Err(e) => error!("Server (pid {}) could not be waited on: {}", exit.pid, chain(&e)),
                     }
                     current_server = None;
                 } else {
@@ -104,7 +103,7 @@ async fn run(args: ServeArgs) -> Result<()> {
                         if let Some(server) = current_server.take()
                             && let Err(e) = server.stop().await
                         {
-                            warn!("Error stopping previous server: {e}");
+                            warn!("Error stopping previous server: {}", chain(&e));
                         }
                         // A failed restart is recoverable: keep supervising so the
                         // next successful build can bring the server back up.
@@ -119,13 +118,13 @@ async fn run(args: ServeArgs) -> Result<()> {
                                 current_server = Some(server);
                             }
                             Err(e) => {
-                                error!("Failed to start server: {e}. Save a change to retry.");
+                                error!("Failed to start server: {}. Save a change to retry.", chain(&e));
                                 current_server = None;
                             }
                         }
                     }
                     Some(Err(e)) => {
-                        error!("Build failed: {e}");
+                        error!("Build failed: {}", chain(&e));
                         info!("Keeping current server running");
                     }
                     None => {
@@ -141,7 +140,7 @@ async fn run(args: ServeArgs) -> Result<()> {
                 if let Some(server) = current_server.take()
                     && let Err(e) = server.stop().await
                 {
-                    warn!("Error stopping server: {e}");
+                    warn!("Error stopping server: {}", chain(&e));
                 }
                 info!("Goodbye");
                 break;

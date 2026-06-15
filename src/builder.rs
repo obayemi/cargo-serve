@@ -193,7 +193,7 @@ fn stage_binary(source: &PathBuf, project: &ProjectInfo) -> Result<PathBuf> {
     // ETXTBSY (Linux) when the previous staged binary is still being executed by
     // the running server. rename(2) swaps the directory entry to a fresh inode,
     // leaving the running process's already-open inode untouched.
-    let tmp = staging_dir.join(format!(".{}.new", project.bin_name));
+    let tmp = staging_dir.join(staging_tmp_name(&project.bin_name, std::process::id()));
 
     let staged = copy_and_swap(source, &tmp, &dest);
     if staged.is_err() {
@@ -201,6 +201,15 @@ fn stage_binary(source: &PathBuf, project: &ProjectInfo) -> Result<PathBuf> {
         let _ = std::fs::remove_file(&tmp);
     }
     staged
+}
+
+/// Name of the per-process staging temp file.
+///
+/// The pid keeps concurrent `cargo-serve` instances watching the same project
+/// from sharing a temp file: without it they race on `rename`, and whichever
+/// renames second finds its temp already gone and fails with `ENOENT`.
+fn staging_tmp_name(bin_name: &str, pid: u32) -> String {
+    format!(".{bin_name}.{pid}.new")
 }
 
 /// Copy `source` to `tmp`, make it executable, then atomically rename it onto `dest`.
@@ -231,6 +240,24 @@ fn copy_and_swap(source: &PathBuf, tmp: &PathBuf, dest: &PathBuf) -> Result<Path
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn staging_tmp_name_is_unique_per_process() {
+        // Two cargo-serve instances watching the same project must not share a
+        // staging temp file, or they race on rename and one gets ENOENT.
+        assert_ne!(
+            staging_tmp_name("app", 100),
+            staging_tmp_name("app", 200),
+            "different processes must use distinct temp files"
+        );
+    }
+
+    #[test]
+    fn staging_tmp_name_is_hidden_and_distinct_from_dest() {
+        let name = staging_tmp_name("app", 42);
+        assert!(name.starts_with('.'), "temp file should be hidden");
+        assert_ne!(name, "app", "temp must not collide with the staged binary");
+    }
 
     #[test]
     fn parse_artifact_success() {

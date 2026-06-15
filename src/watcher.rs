@@ -6,7 +6,7 @@ use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::mpsc;
 use tracing::{debug, trace, warn};
 
-use crate::error::Result;
+use crate::error::{Result, chain};
 
 /// Start a file watcher that sends debounced change notifications on the returned channel.
 ///
@@ -34,7 +34,7 @@ pub fn start(
         let _ = gitignore_builder.add_line(None, pattern);
     }
     let gitignore = gitignore_builder.build().unwrap_or_else(|e| {
-        warn!("Failed to build gitignore matcher: {e}");
+        warn!("Failed to build gitignore matcher: {}", chain(&e));
         GitignoreBuilder::new(workspace_root).build().unwrap()
     });
 
@@ -95,7 +95,7 @@ pub fn start(
                 debug!(?event.paths, "File change detected");
                 let _ = debounce_trigger_tx.try_send(());
             }
-            Err(e) => warn!("Watch error: {e}"),
+            Err(e) => warn!("Watch error: {}", chain(&e)),
         }
     })?;
 
