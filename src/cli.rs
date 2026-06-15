@@ -11,7 +11,7 @@ pub enum CargoSubcommand {
 #[derive(Debug, Default, Parser)]
 #[command(version, about)]
 pub struct ServeArgs {
-    /// Binary target to run (defaults to the package's only binary)
+    /// Binary target to run (defaults to `default-run`, else the package's only binary)
     #[arg(short, long)]
     pub bin: Option<String>,
 

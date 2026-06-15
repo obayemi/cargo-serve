@@ -18,32 +18,15 @@ impl ProjectInfo {
 
         let root_package = metadata.root_package().ok_or(Error::NoBinaryTarget)?;
 
-        let bin_targets: Vec<_> = root_package
+        let bin_target_names: Vec<&str> = root_package
             .targets
             .iter()
             .filter(|t| t.kind.contains(&TargetKind::Bin))
+            .map(|t| t.name.as_str())
             .collect();
 
-        let bin_name = match bin {
-            Some(name) => {
-                if bin_targets.iter().any(|t| t.name.as_str() == name) {
-                    name.to_string()
-                } else {
-                    return Err(Error::BinaryTargetNotFound {
-                        name: name.to_string(),
-                    });
-                }
-            }
-            None => match bin_targets.len() {
-                0 => return Err(Error::NoBinaryTarget),
-                1 => bin_targets[0].name.to_string(),
-                _ => {
-                    return Err(Error::MultipleBinaryTargets {
-                        targets: bin_targets.iter().map(|t| t.name.to_string()).collect(),
-                    });
-                }
-            },
-        };
+        let bin_name =
+            resolve_bin_name(bin, &bin_target_names, root_package.default_run.as_deref())?;
 
         Ok(Self {
             package_name: root_package.name.to_string(),
@@ -64,6 +47,45 @@ impl ProjectInfo {
     }
 }
 
+/// Select which binary target to run.
+///
+/// Precedence: an explicit `--bin` selection, then the package's `default-run`,
+/// then the sole binary when there is only one. With multiple binaries and no
+/// `--bin`/`default-run`, the caller must disambiguate.
+fn resolve_bin_name(
+    requested: Option<&str>,
+    bin_targets: &[&str],
+    default_run: Option<&str>,
+) -> Result<String> {
+    if let Some(name) = requested {
+        return if bin_targets.contains(&name) {
+            Ok(name.to_string())
+        } else {
+            Err(Error::BinaryTargetNotFound {
+                name: name.to_string(),
+            })
+        };
+    }
+
+    if let Some(name) = default_run {
+        return if bin_targets.contains(&name) {
+            Ok(name.to_string())
+        } else {
+            Err(Error::BinaryTargetNotFound {
+                name: name.to_string(),
+            })
+        };
+    }
+
+    match bin_targets {
+        [] => Err(Error::NoBinaryTarget),
+        [only] => Ok(only.to_string()),
+        _ => Err(Error::MultipleBinaryTargets {
+            targets: bin_targets.iter().map(|t| t.to_string()).collect(),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -79,5 +101,47 @@ mod tests {
     fn discover_nonexistent_bin() {
         let err = ProjectInfo::discover(Some("nonexistent")).unwrap_err();
         assert!(matches!(err, Error::BinaryTargetNotFound { .. }));
+    }
+
+    #[test]
+    fn resolve_single_target_without_flag() {
+        let name = resolve_bin_name(None, &["only"], None).unwrap();
+        assert_eq!(name, "only");
+    }
+
+    #[test]
+    fn resolve_explicit_flag_wins_over_default_run() {
+        let name = resolve_bin_name(Some("a"), &["a", "b"], Some("b")).unwrap();
+        assert_eq!(name, "a");
+    }
+
+    #[test]
+    fn resolve_explicit_flag_unknown_errors() {
+        let err = resolve_bin_name(Some("missing"), &["a", "b"], None).unwrap_err();
+        assert!(matches!(err, Error::BinaryTargetNotFound { .. }));
+    }
+
+    #[test]
+    fn resolve_multiple_targets_uses_default_run() {
+        let name = resolve_bin_name(None, &["a", "b"], Some("b")).unwrap();
+        assert_eq!(name, "b");
+    }
+
+    #[test]
+    fn resolve_multiple_targets_without_default_run_errors() {
+        let err = resolve_bin_name(None, &["a", "b"], None).unwrap_err();
+        assert!(matches!(err, Error::MultipleBinaryTargets { .. }));
+    }
+
+    #[test]
+    fn resolve_default_run_pointing_at_unknown_target_errors() {
+        let err = resolve_bin_name(None, &["a", "b"], Some("ghost")).unwrap_err();
+        assert!(matches!(err, Error::BinaryTargetNotFound { .. }));
+    }
+
+    #[test]
+    fn resolve_no_targets_errors() {
+        let err = resolve_bin_name(None, &[], None).unwrap_err();
+        assert!(matches!(err, Error::NoBinaryTarget));
     }
 }

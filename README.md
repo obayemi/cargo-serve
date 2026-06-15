@@ -29,7 +29,7 @@ cargo serve [OPTIONS] [-- <server args>...]
 
 | Option | Description | Default |
 |---|---|---|
-| `-b, --bin <NAME>` | Binary target to run | Package's only binary |
+| `-b, --bin <NAME>` | Binary target to run | `default-run`, else the package's only binary |
 | `--release` | Build in release mode | |
 | `--features <F,...>` | Activate features (comma-separated) | |
 | `--debounce-ms <MS>` | Debounce delay in milliseconds | `500` |
