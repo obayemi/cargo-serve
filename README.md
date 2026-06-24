@@ -97,6 +97,13 @@ These mirror `cargo run`, and are forwarded to the underlying `cargo check` / `c
 | `--no-check` | Skip `cargo check`, go straight to build | |
 | `--no-server-logs` | Hide server stdout/stderr output | |
 | `--no-build-logs` | Hide build/check output | |
+| `--eager-start` | Start from a previously-built binary instead of waiting for the initial build to succeed | |
+
+### Serving a previously-built binary
+
+By default, an initial build failure is fatal — `cargo-serve` won't come up until the project compiles. With `--eager-start`, a broken initial state no longer blocks startup: cargo-serve serves a previously-built binary right away and lets the watcher pick up the next successful build.
+
+It prefers the binary it last staged in `target/.cargo-serve/`, falling back to cargo's own `target/{debug,release}/<bin>` (staging that copy first so a later build can't overwrite the in-use file). If nothing has ever been built, it logs a warning and waits for the first successful build before starting the server.
 
 ### Examples
 
@@ -122,6 +129,9 @@ cargo serve --profile fast-dev --target-dir /tmp/serve-out
 
 # Faster rebuilds by skipping check
 cargo serve --no-check
+
+# Serve the last-built binary even if the project is currently broken
+cargo serve --eager-start
 ```
 
 ## How It Works
@@ -133,7 +143,7 @@ File change → debounce → cargo check → cargo build → stage binary → re
 ```
 
 1. Discovers the package and executable target via `cargo metadata` (honouring `-p`, `--bin`, `--example`, `default-run`)
-2. Runs an initial build (fails hard if it doesn't compile)
+2. Runs an initial build (fails hard if it doesn't compile, unless `--eager-start` is set — then it serves a previously-built binary while you fix the build)
 3. Stages the binary into `target/.cargo-serve/` (copy to a temp file, then atomic rename) and starts the server from there
 4. Watches `src/`, `Cargo.toml`, `Cargo.lock` (and any `--watch` paths) for changes, ignoring the build output directory even when `--target-dir` moves it
 5. On change: check → build → stage → restart (keeping the old server on failure)

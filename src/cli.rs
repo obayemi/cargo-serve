@@ -34,6 +34,11 @@ pub struct ServeArgs {
     #[arg(long, help_heading = "Serve options")]
     pub no_build_logs: bool,
 
+    /// Start immediately from a previously-built binary instead of waiting for
+    /// the initial build to succeed (serves a possibly-stale binary)
+    #[arg(long)]
+    pub eager_start: bool,
+
     /// Arguments to pass to the server binary
     #[arg(last = true)]
     pub server_args: Vec<String>,
@@ -378,6 +383,7 @@ mod tests {
         assert!(!args.no_check);
         assert!(!args.no_server_logs);
         assert!(!args.no_build_logs);
+        assert!(!args.eager_start);
     }
 
     #[test]
@@ -406,6 +412,7 @@ mod tests {
             "--no-check",
             "--no-server-logs",
             "--no-build-logs",
+            "--eager-start",
             "--",
             "--port",
             "8080",
@@ -419,6 +426,7 @@ mod tests {
         assert!(args.no_check);
         assert!(args.no_server_logs);
         assert!(args.no_build_logs);
+        assert!(args.eager_start);
         assert_eq!(args.server_args, vec!["--port", "8080"]);
     }
 

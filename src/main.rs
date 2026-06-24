@@ -28,6 +28,41 @@ async fn main() {
     }
 }
 
+/// Bring the server up from a previously-built binary when the initial build
+/// failed under `--eager-start`. Returns `None` (and logs) when nothing has been
+/// built yet or the stale binary fails to start — in both cases the watch loop
+/// runs server-less until the first successful build.
+fn eager_start_server(
+    project: &ProjectInfo,
+    args: &ServeArgs,
+    exit_tx: &mpsc::UnboundedSender<ServerExit>,
+) -> Result<Option<Server>> {
+    let Some(binary) = builder::locate_stale_binary(project, args)? else {
+        warn!("No previously-built binary found; waiting for the first successful build");
+        return Ok(None);
+    };
+
+    warn!(
+        binary = %binary.display(),
+        "Serving a previously-built (stale) binary; save a change to rebuild"
+    );
+    match Server::spawn(
+        &binary,
+        &args.server_args,
+        !args.no_server_logs,
+        exit_tx.clone(),
+    ) {
+        Ok(server) => Ok(Some(server)),
+        Err(e) => {
+            error!(
+                "Failed to start stale server: {}. Save a change to retry.",
+                chain(&e)
+            );
+            Ok(None)
+        }
+    }
+}
+
 async fn run(args: ServeArgs) -> Result<()> {
     let project = ProjectInfo::discover(&args.cargo)?;
     info!(
@@ -37,21 +72,27 @@ async fn run(args: ServeArgs) -> Result<()> {
         "Discovered project"
     );
 
-    // Initial build — fail hard if it doesn't compile
-    let binary = builder::build(&project, &args).await?;
-
     // Channel on which each spawned server reports its own exit. Owned by this
     // loop so crash/startup-failure detection never borrows `current_server`
     // across the event-loop `select!`.
     let (exit_tx, mut exit_rx) = mpsc::unbounded_channel::<ServerExit>();
 
-    // Start the server. A failure to start the very first server is fatal.
-    let mut current_server = Some(Server::spawn(
-        &binary,
-        &args.server_args,
-        !args.no_server_logs,
-        exit_tx.clone(),
-    )?);
+    // Initial build. Without --eager-start, a failure is fatal. With it, fall
+    // back to a previously-built binary (or wait for the first good build) so a
+    // broken initial state never blocks the server from coming up.
+    let mut current_server = match builder::build(&project, &args).await {
+        Ok(binary) => Some(Server::spawn(
+            &binary,
+            &args.server_args,
+            !args.no_server_logs,
+            exit_tx.clone(),
+        )?),
+        Err(e) if args.eager_start => {
+            warn!("Initial build failed: {}", chain(&e));
+            eager_start_server(&project, &args, &exit_tx)?
+        }
+        Err(e) => return Err(e),
+    };
 
     // Start file watcher
     let debounce = Duration::from_millis(args.debounce_ms);

@@ -31,6 +31,27 @@ pub async fn build(project: &ProjectInfo, args: &ServeArgs) -> Result<PathBuf> {
     Ok(staged)
 }
 
+/// Locate a runnable, ETXTBSY-safe fallback binary for `--eager-start`.
+///
+/// Prefers the binary cargo-serve last staged (`target/.cargo-serve/<bin>`),
+/// which is already safe to execute directly. Otherwise falls back to cargo's
+/// own `target/{debug,release}/<bin>`, staging that copy first so a later build
+/// overwriting the cargo output in place cannot hit the in-use file (ETXTBSY).
+/// Returns `Ok(None)` when no previously-built binary exists.
+pub fn locate_stale_binary(project: &ProjectInfo, args: &ServeArgs) -> Result<Option<PathBuf>> {
+    let staged = project.staged_binary();
+    if staged.exists() {
+        return Ok(Some(staged));
+    }
+
+    let cargo_bin = expected_binary_path(project, args);
+    if cargo_bin.exists() {
+        return Ok(Some(stage_binary(&cargo_bin, project)?));
+    }
+
+    Ok(None)
+}
+
 async fn run_cargo_check(project: &ProjectInfo, args: &ServeArgs, show_logs: bool) -> Result<bool> {
     let mut cmd = cargo_command("check", project, args);
 
@@ -328,6 +349,63 @@ mod tests {
             target_dir: PathBuf::from("/tmp/myapp/target"),
             workspace_root: PathBuf::from("/tmp/myapp"),
         }
+    }
+
+    #[test]
+    fn locate_stale_prefers_staged_binary() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = ProjectInfo {
+            package_name: "myapp".into(),
+            bin_name: "myapp".into(),
+            target_dir: tmp.path().join("target"),
+            workspace_root: tmp.path().to_path_buf(),
+        };
+        std::fs::create_dir_all(project.staging_dir()).unwrap();
+        std::fs::write(project.staged_binary(), b"staged").unwrap();
+
+        let found = locate_stale_binary(&project, &ServeArgs::default()).unwrap();
+        assert_eq!(found, Some(project.staged_binary()));
+    }
+
+    #[test]
+    fn locate_stale_stages_cargo_target_when_no_staged_binary() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = ProjectInfo {
+            package_name: "myapp".into(),
+            bin_name: "myapp".into(),
+            target_dir: tmp.path().join("target"),
+            workspace_root: tmp.path().to_path_buf(),
+        };
+        let cargo_bin = project.target_dir.join("debug").join(&project.bin_name);
+        std::fs::create_dir_all(cargo_bin.parent().unwrap()).unwrap();
+        std::fs::write(&cargo_bin, b"cargo-built").unwrap();
+
+        let found = locate_stale_binary(&project, &ServeArgs::default()).unwrap();
+
+        // The cargo-target copy is staged (so a later build can't overwrite the
+        // in-use file) and the staged path is what we run.
+        assert_eq!(found, Some(project.staged_binary()));
+        assert!(project.staged_binary().exists());
+        assert_eq!(
+            std::fs::read(project.staged_binary()).unwrap(),
+            b"cargo-built"
+        );
+    }
+
+    #[test]
+    fn locate_stale_returns_none_when_nothing_built() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = ProjectInfo {
+            package_name: "myapp".into(),
+            bin_name: "myapp".into(),
+            target_dir: tmp.path().join("target"),
+            workspace_root: tmp.path().to_path_buf(),
+        };
+
+        assert_eq!(
+            locate_stale_binary(&project, &ServeArgs::default()).unwrap(),
+            None
+        );
     }
 
     #[test]
