@@ -29,10 +29,11 @@ async fn main() {
 }
 
 async fn run(args: ServeArgs) -> Result<()> {
-    let project = ProjectInfo::discover(args.bin.as_deref())?;
+    let project = ProjectInfo::discover(&args.cargo)?;
     info!(
         package = %project.package_name,
-        bin = %project.bin_name,
+        target = %project.target_name,
+        kind = project.target_kind.artifact_kind(),
         "Discovered project"
     );
 
@@ -56,6 +57,7 @@ async fn run(args: ServeArgs) -> Result<()> {
     let debounce = Duration::from_millis(args.debounce_ms);
     let (mut file_events, _watcher) = watcher::start(
         &project.workspace_root,
+        &project.target_dir,
         debounce,
         &args.extra_watch,
         &args.extra_ignore,

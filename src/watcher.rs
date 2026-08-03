@@ -11,9 +11,10 @@ use crate::error::{Result, chain};
 /// Start a file watcher that sends debounced change notifications on the returned channel.
 ///
 /// Watches the workspace root recursively, respecting .gitignore, and ignoring
-/// the `target/` directory.
+/// the build output directory.
 pub fn start(
     workspace_root: &Path,
+    target_dir: &Path,
     debounce: Duration,
     extra_watch: &[String],
     extra_ignore: &[String],
@@ -30,6 +31,11 @@ pub fn start(
     let _ = gitignore_builder.add_line(None, "target/");
     let _ = gitignore_builder.add_line(None, ".jj/");
     let _ = gitignore_builder.add_line(None, ".git/");
+    // A `--target-dir` pointing somewhere else inside the workspace would
+    // otherwise make every build trigger the next one.
+    if let Some(pattern) = target_ignore_pattern(workspace_root, target_dir) {
+        let _ = gitignore_builder.add_line(None, &pattern);
+    }
     for pattern in extra_ignore {
         let _ = gitignore_builder.add_line(None, pattern);
     }
@@ -114,4 +120,47 @@ pub fn start(
     }
 
     Ok((rx, watcher))
+}
+
+/// Gitignore pattern hiding the build output directory, when it sits inside the
+/// watched workspace. A target dir outside the workspace never fires events, so
+/// it needs no pattern.
+fn target_ignore_pattern(workspace_root: &Path, target_dir: &Path) -> Option<String> {
+    let relative = target_dir.strip_prefix(workspace_root).ok()?;
+    let relative = relative.to_str()?;
+    if relative.is_empty() {
+        return None;
+    }
+    Some(format!("/{relative}/"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn custom_target_dir_inside_the_workspace_is_ignored() {
+        assert_eq!(
+            target_ignore_pattern(Path::new("/ws"), Path::new("/ws/build/out")),
+            Some("/build/out/".to_string())
+        );
+    }
+
+    #[test]
+    fn target_dir_outside_the_workspace_needs_no_pattern() {
+        assert_eq!(
+            target_ignore_pattern(Path::new("/ws"), &PathBuf::from("/elsewhere/target")),
+            None
+        );
+    }
+
+    #[test]
+    fn target_dir_equal_to_the_workspace_root_is_not_ignored() {
+        // Ignoring the root itself would silence every change.
+        assert_eq!(
+            target_ignore_pattern(Path::new("/ws"), Path::new("/ws")),
+            None
+        );
+    }
 }

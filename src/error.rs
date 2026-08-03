@@ -2,14 +2,30 @@ use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("no binary target found in package")]
-    NoBinaryTarget,
+    #[error("no binary target found in package {package:?} — use --example to run an example")]
+    NoBinaryTarget { package: String },
 
     #[error("multiple binary targets found: {targets:?} — use --bin to select one")]
     MultipleBinaryTargets { targets: Vec<String> },
 
-    #[error("binary target {name:?} not found in package")]
-    BinaryTargetNotFound { name: String },
+    #[error("no {kind} target named {name:?} in package {package:?}")]
+    TargetNotFound {
+        kind: &'static str,
+        name: String,
+        package: String,
+    },
+
+    #[error("package {spec:?} not found in workspace; available packages: {available:?}")]
+    PackageNotFound {
+        spec: String,
+        available: Vec<String>,
+    },
+
+    #[error(
+        "no package selected and the current directory is a virtual workspace root — \
+         use -p to pick one of {available:?}"
+    )]
+    NoCurrentPackage { available: Vec<String> },
 
     #[error("cargo check failed")]
     CheckFailed,
@@ -83,8 +99,10 @@ mod tests {
     #[test]
     fn chain_without_source_is_just_the_message() {
         assert_eq!(
-            chain(&Error::NoBinaryTarget),
-            "no binary target found in package"
+            chain(&Error::MultipleBinaryTargets {
+                targets: vec!["a".into(), "b".into()],
+            }),
+            r#"multiple binary targets found: ["a", "b"] — use --bin to select one"#
         );
     }
 

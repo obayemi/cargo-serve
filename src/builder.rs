@@ -5,9 +5,9 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tracing::{debug, info, warn};
 
-use crate::cli::ServeArgs;
+use crate::cli::{CargoArgs, ServeArgs};
 use crate::error::{Error, Result};
-use crate::project::ProjectInfo;
+use crate::project::{ProjectInfo, TargetKindSelector};
 
 /// Run the check → build pipeline and return the path to the staged binary.
 pub async fn build(project: &ProjectInfo, args: &ServeArgs) -> Result<PathBuf> {
@@ -32,13 +32,7 @@ pub async fn build(project: &ProjectInfo, args: &ServeArgs) -> Result<PathBuf> {
 }
 
 async fn run_cargo_check(project: &ProjectInfo, args: &ServeArgs, show_logs: bool) -> Result<bool> {
-    let mut cmd = Command::new("cargo");
-    cmd.arg("check")
-        .arg("--bin")
-        .arg(&project.bin_name)
-        .arg("--message-format=json");
-
-    apply_common_args(&mut cmd, args);
+    let mut cmd = cargo_command("check", project, args);
 
     cmd.stdout(Stdio::piped())
         .stderr(if show_logs {
@@ -70,13 +64,7 @@ async fn run_cargo_build(
     args: &ServeArgs,
     show_logs: bool,
 ) -> Result<PathBuf> {
-    let mut cmd = Command::new("cargo");
-    cmd.arg("build")
-        .arg("--bin")
-        .arg(&project.bin_name)
-        .arg("--message-format=json");
-
-    apply_common_args(&mut cmd, args);
+    let mut cmd = cargo_command("build", project, args);
 
     cmd.stdout(Stdio::piped())
         .stderr(if show_logs {
@@ -93,7 +81,9 @@ async fn run_cargo_build(
         let reader = BufReader::new(stdout);
         let mut lines = reader.lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            if let Some(path) = parse_compiler_artifact(&line, &project.bin_name) {
+            if let Some(path) =
+                parse_compiler_artifact(&line, &project.target_name, project.target_kind)
+            {
                 binary_path = Some(path);
             }
             if show_logs {
@@ -111,7 +101,7 @@ async fn run_cargo_build(
     let binary_path = match binary_path {
         Some(p) => p,
         None => {
-            let fallback = expected_binary_path(project, args);
+            let fallback = expected_binary_path(project, &args.cargo);
             warn!(
                 path = %fallback.display(),
                 "Binary not found in cargo JSON output, using expected path"
@@ -144,23 +134,42 @@ fn print_diagnostic(json_line: &str) {
     }
 }
 
-/// Construct the expected binary path from project metadata.
-fn expected_binary_path(project: &ProjectInfo, args: &ServeArgs) -> PathBuf {
-    let profile = if args.release { "release" } else { "debug" };
-    project.target_dir.join(profile).join(&project.bin_name)
+/// Build a `cargo <subcommand>` invocation for the selected target, carrying
+/// every forwarded `cargo run`-style flag.
+fn cargo_command(subcommand: &str, project: &ProjectInfo, args: &ServeArgs) -> Command {
+    let mut cmd = Command::new("cargo");
+    cmd.arg(subcommand)
+        .arg(project.target_kind.cargo_flag())
+        .arg(&project.target_name)
+        .arg("--package")
+        .arg(&project.package_name)
+        .arg("--message-format=json")
+        .args(args.cargo.forward_flags());
+    cmd
 }
 
-fn apply_common_args(cmd: &mut Command, args: &ServeArgs) {
-    if args.release {
-        cmd.arg("--release");
+/// Construct the expected artifact path from project metadata.
+///
+/// Mirrors cargo's layout: `<target-dir>[/<triple>]/<profile>[/examples]/<name>`.
+fn expected_binary_path(project: &ProjectInfo, args: &CargoArgs) -> PathBuf {
+    let mut path = project.target_dir.clone();
+    if let Some(triple) = &args.target {
+        path.push(triple);
     }
-    if !args.features.is_empty() {
-        cmd.arg("--features").arg(args.features.join(","));
+    path.push(args.profile_dir());
+    if let Some(subdir) = project.target_kind.artifact_subdir() {
+        path.push(subdir);
     }
+    path.push(&project.target_name);
+    path
 }
 
-/// Parse a JSON compiler artifact message and extract the binary path.
-pub fn parse_compiler_artifact(json_line: &str, bin_name: &str) -> Option<PathBuf> {
+/// Parse a JSON compiler artifact message and extract the executable path.
+pub fn parse_compiler_artifact(
+    json_line: &str,
+    target_name: &str,
+    target_kind: TargetKindSelector,
+) -> Option<PathBuf> {
     let msg: serde_json::Value = serde_json::from_str(json_line).ok()?;
 
     if msg.get("reason")?.as_str()? != "compiler-artifact" {
@@ -171,7 +180,11 @@ pub fn parse_compiler_artifact(json_line: &str, bin_name: &str) -> Option<PathBu
     let name = target.get("name")?.as_str()?;
     let kind = target.get("kind")?.as_array()?;
 
-    if name != bin_name || !kind.iter().any(|k| k.as_str() == Some("bin")) {
+    if name != target_name
+        || !kind
+            .iter()
+            .any(|k| k.as_str() == Some(target_kind.artifact_kind()))
+    {
         return None;
     }
 
@@ -193,7 +206,7 @@ fn stage_binary(source: &PathBuf, project: &ProjectInfo) -> Result<PathBuf> {
     // ETXTBSY (Linux) when the previous staged binary is still being executed by
     // the running server. rename(2) swaps the directory entry to a fresh inode,
     // leaving the running process's already-open inode untouched.
-    let tmp = staging_dir.join(staging_tmp_name(&project.bin_name, std::process::id()));
+    let tmp = staging_dir.join(staging_tmp_name(&project.target_name, std::process::id()));
 
     let staged = copy_and_swap(source, &tmp, &dest);
     if staged.is_err() {
@@ -259,48 +272,108 @@ mod tests {
         assert_ne!(name, "app", "temp must not collide with the staged binary");
     }
 
+    fn parse_bin(json: &str) -> Option<PathBuf> {
+        parse_compiler_artifact(json, "myapp", TargetKindSelector::Bin)
+    }
+
     #[test]
     fn parse_artifact_success() {
         let json = r#"{"reason":"compiler-artifact","package_id":"myapp 0.1.0","manifest_path":"/tmp/myapp/Cargo.toml","target":{"kind":["bin"],"name":"myapp","src_path":"/tmp/myapp/src/main.rs"},"executable":"/tmp/myapp/target/debug/myapp","filenames":["/tmp/myapp/target/debug/myapp"],"fresh":false}"#;
-        let path = parse_compiler_artifact(json, "myapp");
-        assert_eq!(path, Some(PathBuf::from("/tmp/myapp/target/debug/myapp")));
+        assert_eq!(
+            parse_bin(json),
+            Some(PathBuf::from("/tmp/myapp/target/debug/myapp"))
+        );
     }
 
     #[test]
     fn parse_artifact_wrong_name() {
         let json = r#"{"reason":"compiler-artifact","target":{"kind":["bin"],"name":"other"},"executable":"/tmp/other"}"#;
-        assert_eq!(parse_compiler_artifact(json, "myapp"), None);
+        assert_eq!(parse_bin(json), None);
     }
 
     #[test]
     fn parse_artifact_lib_target() {
         let json = r#"{"reason":"compiler-artifact","target":{"kind":["lib"],"name":"myapp"},"executable":null}"#;
-        assert_eq!(parse_compiler_artifact(json, "myapp"), None);
+        assert_eq!(parse_bin(json), None);
     }
 
     #[test]
     fn parse_non_artifact_message() {
         let json = r#"{"reason":"build-script-executed","package_id":"foo"}"#;
-        assert_eq!(parse_compiler_artifact(json, "myapp"), None);
+        assert_eq!(parse_bin(json), None);
     }
 
     #[test]
     fn parse_invalid_json() {
-        assert_eq!(parse_compiler_artifact("not json", "myapp"), None);
+        assert_eq!(parse_bin("not json"), None);
+    }
+
+    #[test]
+    fn parse_artifact_distinguishes_example_from_binary() {
+        // A package can have a binary and an example sharing a name; picking the
+        // wrong one would serve the wrong executable.
+        let example = r#"{"reason":"compiler-artifact","target":{"kind":["example"],"name":"myapp"},"executable":"/tmp/myapp/target/debug/examples/myapp"}"#;
+        assert_eq!(parse_bin(example), None);
+        assert_eq!(
+            parse_compiler_artifact(example, "myapp", TargetKindSelector::Example),
+            Some(PathBuf::from("/tmp/myapp/target/debug/examples/myapp"))
+        );
+    }
+
+    fn test_project(target_kind: TargetKindSelector) -> ProjectInfo {
+        ProjectInfo {
+            package_name: "myapp".into(),
+            target_name: "myapp".into(),
+            target_kind,
+            target_dir: PathBuf::from("/tmp/myapp/target"),
+            workspace_root: PathBuf::from("/tmp/myapp"),
+        }
     }
 
     #[test]
     fn expected_binary_path_debug() {
-        let project = ProjectInfo {
-            package_name: "myapp".into(),
-            bin_name: "myapp".into(),
-            target_dir: PathBuf::from("/tmp/myapp/target"),
-            workspace_root: PathBuf::from("/tmp/myapp"),
-        };
-        let args = ServeArgs::default();
         assert_eq!(
-            expected_binary_path(&project, &args),
+            expected_binary_path(
+                &test_project(TargetKindSelector::Bin),
+                &CargoArgs::default()
+            ),
             PathBuf::from("/tmp/myapp/target/debug/myapp")
+        );
+    }
+
+    #[test]
+    fn expected_binary_path_custom_profile() {
+        let args = CargoArgs {
+            profile: Some("fast-dev".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            expected_binary_path(&test_project(TargetKindSelector::Bin), &args),
+            PathBuf::from("/tmp/myapp/target/fast-dev/myapp")
+        );
+    }
+
+    #[test]
+    fn expected_binary_path_cross_compiled_nests_under_the_triple() {
+        let args = CargoArgs {
+            target: Some("aarch64-unknown-linux-gnu".into()),
+            release: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            expected_binary_path(&test_project(TargetKindSelector::Bin), &args),
+            PathBuf::from("/tmp/myapp/target/aarch64-unknown-linux-gnu/release/myapp")
+        );
+    }
+
+    #[test]
+    fn expected_binary_path_example_nests_under_examples() {
+        assert_eq!(
+            expected_binary_path(
+                &test_project(TargetKindSelector::Example),
+                &CargoArgs::default()
+            ),
+            PathBuf::from("/tmp/myapp/target/debug/examples/myapp")
         );
     }
 
@@ -312,10 +385,9 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
         let project = ProjectInfo {
-            package_name: "myapp".into(),
-            bin_name: "myapp".into(),
             target_dir: tmp.path().join("target"),
             workspace_root: tmp.path().to_path_buf(),
+            ..test_project(TargetKindSelector::Bin)
         };
 
         // First build → first staged binary.
@@ -354,18 +426,12 @@ mod tests {
 
     #[test]
     fn expected_binary_path_release() {
-        let project = ProjectInfo {
-            package_name: "myapp".into(),
-            bin_name: "myapp".into(),
-            target_dir: PathBuf::from("/tmp/myapp/target"),
-            workspace_root: PathBuf::from("/tmp/myapp"),
-        };
-        let args = ServeArgs {
+        let args = CargoArgs {
             release: true,
             ..Default::default()
         };
         assert_eq!(
-            expected_binary_path(&project, &args),
+            expected_binary_path(&test_project(TargetKindSelector::Bin), &args),
             PathBuf::from("/tmp/myapp/target/release/myapp")
         );
     }
