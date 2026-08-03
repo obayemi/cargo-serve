@@ -19,6 +19,35 @@ A Cargo plugin that watches for file changes, rebuilds your project, and **only 
 cargo install --path .
 ```
 
+### Nix
+
+Run it without installing, or build the package:
+
+```sh
+nix run github:obayemi/cargo-serve
+nix build github:obayemi/cargo-serve
+```
+
+### Home Manager
+
+The flake exposes `overlays.default`, which adds `pkgs.cargo-serve`:
+
+```nix
+{
+  inputs.cargo-serve.url = "github:obayemi/cargo-serve";
+
+  # in your home-manager configuration
+  nixpkgs.overlays = [inputs.cargo-serve.overlays.default];
+  home.packages = [pkgs.cargo-serve];
+}
+```
+
+Or skip the overlay and take the package directly:
+
+```nix
+home.packages = [inputs.cargo-serve.packages.${pkgs.system}.cargo-serve];
+```
+
 ## Usage
 
 ```sh
