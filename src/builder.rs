@@ -44,7 +44,7 @@ pub fn locate_stale_binary(project: &ProjectInfo, args: &ServeArgs) -> Result<Op
         return Ok(Some(staged));
     }
 
-    let cargo_bin = expected_binary_path(project, args);
+    let cargo_bin = expected_binary_path(project, &args.cargo);
     if cargo_bin.exists() {
         return Ok(Some(stage_binary(&cargo_bin, project)?));
     }
@@ -356,7 +356,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let project = ProjectInfo {
             package_name: "myapp".into(),
-            bin_name: "myapp".into(),
+            target_name: "myapp".into(),
+            target_kind: TargetKindSelector::Bin,
             target_dir: tmp.path().join("target"),
             workspace_root: tmp.path().to_path_buf(),
         };
@@ -372,11 +373,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let project = ProjectInfo {
             package_name: "myapp".into(),
-            bin_name: "myapp".into(),
+            target_name: "myapp".into(),
+            target_kind: TargetKindSelector::Bin,
             target_dir: tmp.path().join("target"),
             workspace_root: tmp.path().to_path_buf(),
         };
-        let cargo_bin = project.target_dir.join("debug").join(&project.bin_name);
+        let cargo_bin = project.target_dir.join("debug").join(&project.target_name);
         std::fs::create_dir_all(cargo_bin.parent().unwrap()).unwrap();
         std::fs::write(&cargo_bin, b"cargo-built").unwrap();
 
@@ -397,7 +399,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let project = ProjectInfo {
             package_name: "myapp".into(),
-            bin_name: "myapp".into(),
+            target_name: "myapp".into(),
+            target_kind: TargetKindSelector::Bin,
             target_dir: tmp.path().join("target"),
             workspace_root: tmp.path().to_path_buf(),
         };
